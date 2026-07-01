@@ -8,6 +8,26 @@ server. The data source is pluggable and declared entirely in config.
 - **Today:** [Yahoo Finance MCP](https://github.com/Alex2Yang97/yahoo-finance-mcp) — stock prices, financial statements, options, analyst recommendations.
 - **Later:** [CHE MCP](https://github.com/Albano-schz/che-mcp-docs) (an Argentine data gateway) is not yet released. When it launches, switching to it is a **config-only change** — no Python edits required.
 
+## Stack
+
+The **agentic framework is [LangGraph](https://langchain-ai.github.io/langgraph/)** —
+it runs the agent loop. `agent.py` builds an explicit LangGraph `StateGraph` (the
+`agent` ↔ `tools` ReAct loop with a conditional edge), compiled with
+`builder.compile(...)` and executed via `graph.ainvoke(...)`. LangGraph also
+supplies the pieces that make this an *agent* rather than a single call:
+
+- **`StateGraph` + `add_messages`** — the graph and the reducer that accumulates the conversation.
+- **`MemorySaver` checkpointer** — multi-turn session memory (see [Usage](#usage)).
+- **Conditional edges** — the routing that decides "call another tool" vs. "finish".
+
+Supporting libraries (around the framework, not the framework itself):
+
+- **`langchain-anthropic`** (`ChatAnthropic`) — the LLM binding to Claude (`claude-opus-4-8`).
+- **`langchain-mcp-adapters`** (`MultiServerMCPClient`) — turns an MCP server's tools into tools LangGraph can call.
+
+In short: **LangGraph = orchestration / agentic framework**, Claude = the model,
+MCP = the pluggable tool/data source.
+
 ## How it works
 
 ```
