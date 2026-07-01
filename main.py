@@ -7,9 +7,50 @@ Usage:
 """
 
 import asyncio
+import os
 import sys
 
 from agent import analyze_investments
+
+
+def refresh_windows_path() -> None:
+    """Rebuild PATH from the registry (Windows only).
+
+    MCP servers launch as subprocesses (e.g. ``uvx``). If a tool was installed
+    after the current shell opened, that shell's PATH is stale and the spawn
+    fails with a cryptic ``WinError 2``. Re-reading the machine + user PATH from
+    the registry makes freshly-installed tools discoverable without reopening
+    the terminal.
+    """
+    if sys.platform != "win32":
+        return
+    import winreg
+
+    values = []
+    for root, sub in (
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+    ):
+        try:
+            with winreg.OpenKey(root, sub) as key:
+                val, _ = winreg.QueryValueEx(key, "Path")
+                if val:
+                    values.append(os.path.expandvars(val))
+        except OSError:
+            pass
+
+    if values:
+        merged = os.pathsep.join(values)
+        current = os.environ.get("PATH", "")
+        # De-duplicate while preserving order (registry entries first).
+        seen, ordered = set(), []
+        for part in (merged + os.pathsep + current).split(os.pathsep):
+            key = part.lower()
+            if part and key not in seen:
+                seen.add(key)
+                ordered.append(part)
+        os.environ["PATH"] = os.pathsep.join(ordered)
 
 
 def read_query() -> str:
@@ -36,6 +77,9 @@ def main() -> None:
     # defaults to cp1252 and would mangle them, so force UTF-8 output.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+
+    # Make freshly-installed tools (e.g. uvx) discoverable in a stale shell.
+    refresh_windows_path()
 
     # MCP servers launch as stdio subprocesses; the Proactor loop on Windows
     # handles subprocess pipes correctly (it is the default on 3.8+, set

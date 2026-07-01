@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
@@ -108,6 +109,29 @@ def load_mcp_config() -> dict[str, Any]:
     return servers
 
 
+def resolve_commands(servers: dict[str, Any]) -> dict[str, Any]:
+    """Resolve each server's ``command`` to an absolute path on PATH.
+
+    Launching a stdio MCP server spawns its ``command`` as a subprocess. If the
+    command isn't on PATH the OS raises a cryptic ``WinError 2`` /
+    ``FileNotFoundError``. Resolving up front lets us (a) hand the OS an absolute
+    path and (b) fail with an actionable message when the tool is missing.
+    """
+    for name, cfg in servers.items():
+        command = cfg.get("command")
+        if not command:
+            continue
+        resolved = shutil.which(command)
+        if resolved is None:
+            raise RuntimeError(
+                f"MCP server '{name}' requires '{command}', which was not found "
+                f"on PATH. Install it (e.g. `winget install --id astral-sh.uv` "
+                f"for uvx) and open a NEW terminal so PATH refreshes."
+            )
+        cfg["command"] = resolved
+    return servers
+
+
 # --------------------------------------------------------------------------- #
 # Graph definition
 # --------------------------------------------------------------------------- #
@@ -188,7 +212,8 @@ def build_agent_graph(tools: list):
 
 async def analyze_investments(query: str) -> str:
     """Run one investment-analysis query end to end and return the answer."""
-    client = MultiServerMCPClient(load_mcp_config())
+    servers = resolve_commands(load_mcp_config())
+    client = MultiServerMCPClient(servers)
     tools = await client.get_tools()
 
     graph = build_agent_graph(tools)

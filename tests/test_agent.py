@@ -97,6 +97,31 @@ def test_default_model_is_opus():
 
 
 # --------------------------------------------------------------------------- #
+# resolve_commands
+# --------------------------------------------------------------------------- #
+
+def test_resolve_commands_rewrites_to_absolute_path(monkeypatch):
+    monkeypatch.setattr(agent.shutil, "which", lambda c: r"C:\tools\uvx.exe")
+    servers = {"yahoo_finance": {"command": "uvx", "args": ["x"]}}
+    result = agent.resolve_commands(servers)
+    assert result["yahoo_finance"]["command"] == r"C:\tools\uvx.exe"
+
+
+def test_resolve_commands_raises_when_missing(monkeypatch):
+    monkeypatch.setattr(agent.shutil, "which", lambda c: None)
+    servers = {"yahoo_finance": {"command": "uvx"}}
+    with pytest.raises(RuntimeError, match="was not found on PATH"):
+        agent.resolve_commands(servers)
+
+
+def test_resolve_commands_ignores_entries_without_command(monkeypatch):
+    monkeypatch.setattr(agent.shutil, "which", lambda c: None)
+    servers = {"remote": {"transport": "sse", "url": "http://x"}}
+    # No 'command' key -> nothing to resolve, no error.
+    assert agent.resolve_commands(servers) == servers
+
+
+# --------------------------------------------------------------------------- #
 # StateGraph: routing + wiring
 # --------------------------------------------------------------------------- #
 
