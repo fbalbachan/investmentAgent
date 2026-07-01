@@ -56,7 +56,9 @@ prompt (`python main.py` with no args).
 
 ## Architecture
 
-- `agent.py` — builds the LangGraph ReAct agent. `load_mcp_config()` reads
+- `agent.py` — builds an explicit LangGraph `StateGraph` ReAct loop (`agent` ↔
+  `tools` nodes with a conditional edge; `build_agent_graph()`), not the prebuilt
+  `create_react_agent`. `load_mcp_config()` reads
   `mcp_config.json`, skips disabled servers (keys starting with `_`), and
   resolves `${VAR}` env placeholders. `analyze_investments(query)` is the async
   entry point. Model defaults to `claude-opus-4-8` (override via `AGENT_MODEL`).

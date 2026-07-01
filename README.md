@@ -20,8 +20,22 @@ server. The data source is pluggable and declared entirely in config.
 ```
 
 `agent.py` loads the server list from `mcp_config.json`, exposes each server's
-tools to Claude, and runs a ReAct loop: Claude decides which tools to call,
-reads the results, and synthesizes an answer.
+tools to Claude, and runs the ReAct loop as an explicit LangGraph `StateGraph`:
+
+```
+START ─▶ agent ──(tool calls?)──▶ tools ─▶ agent ─▶ ... ─▶ END
+             └────────(no tool calls)───────────────────▶ END
+```
+
+- **`agent` node** — calls Claude (with tools bound) on the running message history.
+- **`tools` node** — executes whatever tools Claude requested and appends the results.
+- A **conditional edge** loops back to `agent` while Claude keeps requesting
+  tools, and routes to `END` once it produces a final answer.
+
+The graph is hand-wired (rather than using `create_react_agent`) so there's room
+to add nodes for validation, guardrails, or multi-stage analysis. Tool failures
+are caught per-call and fed back to Claude, and an `AGENT_RECURSION_LIMIT`
+(default 25) caps the loop.
 
 ## Requirements
 
@@ -87,7 +101,7 @@ environment variable.
 
 | File | Role |
 |------|------|
-| `agent.py` | Builds the LangGraph ReAct agent; `load_mcp_config()` + `analyze_investments(query)`. |
+| `agent.py` | Builds the LangGraph `StateGraph` ReAct loop; `load_mcp_config()`, `build_agent_graph()`, `analyze_investments(query)`. |
 | `main.py` | CLI wrapper — reads the query, sets UTF-8 output + Windows Proactor loop, runs the agent. |
 | `mcp_config.json` | MCP server list (`yahoo_finance` active; CHE MCP placeholder). |
 | `requirements.txt` | Python dependencies. |

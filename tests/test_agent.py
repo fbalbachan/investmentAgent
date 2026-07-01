@@ -94,3 +94,41 @@ def test_real_config_enables_yahoo_finance_only():
 
 def test_default_model_is_opus():
     assert agent.MODEL == "claude-opus-4-8"
+
+
+# --------------------------------------------------------------------------- #
+# StateGraph: routing + wiring
+# --------------------------------------------------------------------------- #
+
+from langchain_core.messages import AIMessage
+from langgraph.graph import END
+
+
+def test_should_continue_routes_to_tools_when_tool_calls_present():
+    ai = AIMessage(
+        content="",
+        tool_calls=[{"name": "get_price", "args": {"ticker": "AAPL"}, "id": "1"}],
+    )
+    assert agent._should_continue({"messages": [ai]}) == "tools"
+
+
+def test_should_continue_ends_when_no_tool_calls():
+    ai = AIMessage(content="Here is my final analysis.")
+    assert agent._should_continue({"messages": [ai]}) == END
+
+
+def test_build_agent_graph_wires_expected_nodes(monkeypatch):
+    # A dummy key so ChatAnthropic can construct; no network call is made here.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-not-real")
+
+    from langchain_core.tools import tool
+
+    @tool
+    def get_price(ticker: str) -> str:
+        """Return a fake price for a ticker."""
+        return f"{ticker}: 100"
+
+    graph = agent.build_agent_graph([get_price])
+    nodes = graph.get_graph().nodes
+    assert "agent" in nodes
+    assert "tools" in nodes
