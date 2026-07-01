@@ -1,0 +1,22 @@
+{
+  "yahoo_finance": {
+    "command": "uvx",
+    "args": [
+      "--from",
+      "git+https://github.com/Alex2Yang97/yahoo-finance-mcp",
+      "yahoo-finance-mcp"
+    ],
+    "transport": "stdio"
+  },
+
+  "_che_mcp_when_released": {
+    "_comment": "CHE MCP is not yet publicly released (npm @artificio/che-mcp is 'Phase 3 — Coming'). When it launches, remove the leading underscore from this key to activate it, and remove or disable 'yahoo_finance' above. Fill in real credentials via environment variables — do NOT hardcode secrets here. Docs: https://github.com/Albano-schz/che-mcp-docs",
+    "command": "npx",
+    "args": ["-y", "@artificio/che-mcp"],
+    "transport": "stdio",
+    "env": {
+      "CHE_API_KEY": "${CHE_API_KEY}",
+      "CHE_JWT": "${CHE_JWT}"
+    }
+  }
+}

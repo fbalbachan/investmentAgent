@@ -1,0 +1,37 @@
+# Secrets
+.env
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.idea/
+.claude/
+
+# Unrelated project sharing this directory — NOT part of the investment agent.
+# Kept out of this repo intentionally. Paths anchored to repo root (leading /)
+# so they don't accidentally match e.g. .github/workflows.
+/.os/
+/hub/
+/agents/
+/evals/
+/projects/
+/skills/
+/rules/
+/workflows/
+/memory/
+/artifacts/
+/scripts/
+/AGENTS.md
+/FAILURE.md
+/handoff.md
+/status.md
+/tasks.md
+/plan.md
+/decisions.md
+/knowledge.md
