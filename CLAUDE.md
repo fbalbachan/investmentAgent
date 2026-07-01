@@ -51,8 +51,10 @@ when it launches, switching to it is a **config-only change** in `mcp_config.jso
 python main.py "Compare AAPL and MSFT as long-term holds"
 ```
 
-Also accepts a piped query (`echo "..." | python main.py`) or an interactive
-prompt (`python main.py` with no args).
+Also accepts a piped query (`echo "..." | python main.py`). Running with **no
+args** starts an interactive multi-turn session with in-process memory (a
+LangGraph `MemorySaver` checkpointer); a query passed as an arg or piped runs
+one-shot with no memory.
 
 ## Architecture
 
@@ -61,7 +63,9 @@ prompt (`python main.py` with no args).
   `create_react_agent`. `load_mcp_config()` reads
   `mcp_config.json`, skips disabled servers (keys starting with `_`), and
   resolves `${VAR}` env placeholders. `analyze_investments(query)` is the async
-  entry point. Model defaults to `claude-opus-4-8` (override via `AGENT_MODEL`).
+  one-shot entry point; `create_session()` + `ask(graph, query, thread_id)` give
+  a memory-backed multi-turn session. Model defaults to `claude-opus-4-8`
+  (override via `AGENT_MODEL`).
 - `main.py` — CLI wrapper; sets the Windows Proactor event loop and calls
   `asyncio.run(...)`.
 - `mcp_config.json` — MCP server definitions. `yahoo_finance` is active;

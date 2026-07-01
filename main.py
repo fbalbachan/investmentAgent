@@ -1,16 +1,16 @@
 """CLI entry point for the investment-analysis agent.
 
 Usage:
-    python main.py "Compare AAPL and MSFT as long-term holds"
-    echo "Is NVDA overvalued right now?" | python main.py
-    python main.py            # then type your question at the prompt
+    python main.py "Compare AAPL and MSFT as long-term holds"   # one-shot
+    echo "Is NVDA overvalued right now?" | python main.py        # one-shot (piped)
+    python main.py            # no args -> interactive session with memory
 """
 
 import asyncio
 import os
 import sys
 
-from agent import analyze_investments
+import agent
 
 
 def refresh_windows_path() -> None:
@@ -53,23 +53,65 @@ def refresh_windows_path() -> None:
         os.environ["PATH"] = os.pathsep.join(ordered)
 
 
+EXIT_WORDS = {"exit", "quit", ":q"}
+
+
+def has_inline_query() -> bool:
+    """True when a query came from CLI args or a stdin pipe (one-shot mode)."""
+    return len(sys.argv) > 1 or not sys.stdin.isatty()
+
+
 def read_query() -> str:
-    """Get the query from CLI args, stdin pipe, or an interactive prompt."""
+    """Get the one-shot query from CLI args or a stdin pipe."""
     if len(sys.argv) > 1:
         return " ".join(sys.argv[1:]).strip()
-    if not sys.stdin.isatty():
-        return sys.stdin.read().strip()
-    return input("Investment question: ").strip()
+    return sys.stdin.read().strip()
 
 
-async def _run() -> int:
+async def _run_once() -> int:
     query = read_query()
     if not query:
         print("No query provided.", file=sys.stderr)
         return 1
-    answer = await analyze_investments(query)
+    answer = await agent.analyze_investments(query)
     print(answer)
     return 0
+
+
+async def _run_session() -> int:
+    """Interactive multi-turn session that remembers earlier questions."""
+    print("Investment agent — interactive session with memory.")
+    print("Ask follow-ups; earlier questions stay in context.")
+    print("Type 'exit' (or Ctrl-C) to quit.\n")
+
+    print("Connecting to data source...", flush=True)
+    graph = await agent.create_session()
+
+    while True:
+        try:
+            query = input("\nYou: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not query:
+            continue
+        if query.lower() in EXIT_WORDS:
+            break
+        try:
+            answer = await agent.ask(graph, query)
+        except Exception as exc:  # keep the session alive on a single failure
+            print(f"\n[error] {exc}", file=sys.stderr)
+            continue
+        print(f"\nAgent: {answer}")
+
+    print("Session ended.")
+    return 0
+
+
+async def _run() -> int:
+    if has_inline_query():
+        return await _run_once()
+    return await _run_session()
 
 
 def main() -> None:

@@ -157,3 +157,19 @@ def test_build_agent_graph_wires_expected_nodes(monkeypatch):
     nodes = graph.get_graph().nodes
     assert "agent" in nodes
     assert "tools" in nodes
+
+
+def test_build_agent_graph_accepts_checkpointer(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-not-real")
+
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import MemorySaver
+
+    @tool
+    def get_price(ticker: str) -> str:
+        """Return a fake price for a ticker."""
+        return f"{ticker}: 100"
+
+    graph = agent.build_agent_graph([get_price], checkpointer=MemorySaver())
+    # A compiled graph with a checkpointer exposes one for state persistence.
+    assert graph.checkpointer is not None

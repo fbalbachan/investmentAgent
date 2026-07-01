@@ -71,9 +71,30 @@ python main.py "Compare AAPL and MSFT as long-term holds"
 # Piped from stdin
 echo "Is NVDA overvalued right now?" | python main.py
 
-# Interactive — run with no args and type your question
+# Interactive session with memory — run with no args
 python main.py
 ```
+
+Running with **no arguments** (in a real terminal) starts an **interactive
+session that remembers earlier questions**, so follow-ups resolve against
+context:
+
+```
+$ python main.py
+Investment agent — interactive session with memory.
+
+You: How is MELI doing this year?
+Agent: ...
+
+You: How does it compare to Amazon?      # "it" = MELI, remembered
+Agent: ...
+
+You: exit
+```
+
+Memory is kept in-process (via a LangGraph `MemorySaver` checkpointer) and lasts
+for the life of the session — it's cleared when you exit. A single query passed
+as an argument or piped in still runs one-shot (no memory).
 
 > The **first run is slower**: `uvx` downloads and builds the Yahoo Finance MCP
 > server, then caches it for subsequent runs.

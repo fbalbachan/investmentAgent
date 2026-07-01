@@ -29,17 +29,29 @@ def test_read_query_from_stdin_pipe(monkeypatch):
     assert main.read_query() == "Is NVDA overvalued?"
 
 
-def test_read_query_interactive_prompt(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["main.py"])
-    monkeypatch.setattr("sys.stdin", _FakeStdin("", tty=True))
-    monkeypatch.setattr("builtins.input", lambda *a: "  typed question  ")
-    assert main.read_query() == "typed question"
-
-
 def test_args_take_precedence_over_stdin(monkeypatch):
     monkeypatch.setattr("sys.argv", ["main.py", "from-args"])
     monkeypatch.setattr("sys.stdin", _FakeStdin("from-stdin", tty=False))
     assert main.read_query() == "from-args"
+
+
+def test_has_inline_query_true_for_args(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["main.py", "AAPL"])
+    monkeypatch.setattr("sys.stdin", _FakeStdin("", tty=True))
+    assert main.has_inline_query() is True
+
+
+def test_has_inline_query_true_for_pipe(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["main.py"])
+    monkeypatch.setattr("sys.stdin", _FakeStdin("piped", tty=False))
+    assert main.has_inline_query() is True
+
+
+def test_has_inline_query_false_for_interactive(monkeypatch):
+    """No args + a real terminal -> interactive session (not one-shot)."""
+    monkeypatch.setattr("sys.argv", ["main.py"])
+    monkeypatch.setattr("sys.stdin", _FakeStdin("", tty=True))
+    assert main.has_inline_query() is False
 
 
 def test_refresh_windows_path_noop_off_windows(monkeypatch):

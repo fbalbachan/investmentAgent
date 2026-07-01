@@ -38,6 +38,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
@@ -155,11 +156,15 @@ def _should_continue(state: AgentState) -> str:
     return END
 
 
-def build_agent_graph(tools: list):
+def build_agent_graph(tools: list, checkpointer=None):
     """Compile the ReAct StateGraph for the given tool set.
 
     The model and tools are closed over by the node functions, so the returned
     graph is self-contained and can be invoked directly.
+
+    Pass a ``checkpointer`` (e.g. ``MemorySaver``) to persist conversation state
+    across invocations; callers must then supply a ``thread_id`` in the invoke
+    config so the graph knows which conversation to resume.
     """
     # Note: `temperature` is deprecated on Opus 4.6+ models (rejected with 400),
     # so it is intentionally not set here.
@@ -203,22 +208,58 @@ def build_agent_graph(tools: list):
         "agent", _should_continue, {"tools": "tools", END: END}
     )
     builder.add_edge("tools", "agent")
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
 
-async def analyze_investments(query: str) -> str:
-    """Run one investment-analysis query end to end and return the answer."""
+async def _load_tools() -> list:
+    """Connect to the enabled MCP servers and return their tools."""
     servers = resolve_commands(load_mcp_config())
     client = MultiServerMCPClient(servers)
-    tools = await client.get_tools()
+    return await client.get_tools()
 
+
+async def analyze_investments(query: str) -> str:
+    """Run one investment-analysis query end to end and return the answer.
+
+    Stateless: each call starts a fresh conversation. For a multi-turn session
+    with memory, use :func:`create_session` + :func:`ask` instead.
+    """
+    tools = await _load_tools()
     graph = build_agent_graph(tools)
     result = await graph.ainvoke(
         {"messages": [HumanMessage(content=query)]},
         config={"recursion_limit": RECURSION_LIMIT},
+    )
+    return result["messages"][-1].content
+
+
+async def create_session():
+    """Build a reusable, memory-backed agent graph for a multi-turn session.
+
+    Loads the MCP tools once and compiles the graph with an in-memory
+    checkpointer. Feed the returned graph to :func:`ask` with a stable
+    ``thread_id`` and each turn will see the full prior conversation. Memory
+    lives in-process only — it is lost when the process exits.
+    """
+    tools = await _load_tools()
+    return build_agent_graph(tools, checkpointer=MemorySaver())
+
+
+async def ask(graph, query: str, thread_id: str = "cli-session") -> str:
+    """Ask one turn on a memory-backed session graph and return the answer.
+
+    All turns sharing a ``thread_id`` accumulate into one conversation, so
+    follow-ups like "compare it to Amazon" resolve against earlier context.
+    """
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content=query)]},
+        config={
+            "recursion_limit": RECURSION_LIMIT,
+            "configurable": {"thread_id": thread_id},
+        },
     )
     return result["messages"][-1].content
