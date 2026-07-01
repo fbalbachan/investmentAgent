@@ -13,6 +13,10 @@ __pycache__/
 .idea/
 .claude/
 
+# Local secret-handling helper scripts
+set_api_key.ps1
+check_key.ps1
+
 # Unrelated project sharing this directory — NOT part of the investment agent.
 # Kept out of this repo intentionally. Paths anchored to repo root (leading /)
 # so they don't accidentally match e.g. .github/workflows.
