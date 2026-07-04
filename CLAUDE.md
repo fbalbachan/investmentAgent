@@ -78,7 +78,10 @@ one-shot with no memory.
   **BM25** lexical search (`rank_bm25`), fused with **Reciprocal Rank Fusion**,
   then reordered by a multilingual **cross-encoder reranker** (`RAG_RERANK_MODEL`)
   — the lexical half + reranker matter for noisy OCR and exact tokens (company
-  names, CUIT/DNI). All models run locally (no API key). It enforces a
+  names, CUIT/DNI). All models run locally (no API key). The tool takes two
+  inputs — `query` (semantic) and optional `exact_terms` (verbatim identifiers,
+  weighted up in BM25 via `RAG_EXACT_BOOST`) — so entity-targeted lookups aren't
+  diluted by boilerplate. It enforces a
   **two-layer out-of-scope guardrail**: a Claude scope classifier
   (`RAG_GUARD_MODEL`, default Haiku) rejects non-commercial-societies queries
   before retrieval, and a **relevance floor** (reranker prob `RAG_RERANK_THRESHOLD`
