@@ -58,14 +58,28 @@ one-shot with no memory.
 
 ## Architecture
 
-- `agent.py` — builds an explicit LangGraph `StateGraph` ReAct loop (`agent` ↔
-  `tools` nodes with a conditional edge; `build_agent_graph()`), not the prebuilt
-  `create_react_agent`. `load_mcp_config()` reads
+- `agent.py` — builds an explicit LangGraph `StateGraph` ReAct loop
+  (`build_agent_graph()`), not the prebuilt `create_react_agent`. The router
+  `_route_after_agent` branches each turn to one of three nodes: `agent` (calls
+  Claude), `tools` (live MCP data tools), or `rag` (the commercial-societies
+  retrieval fallback — see `rag.py`). Making RAG its own node keeps the fallback
+  strategy explicit in the graph. `load_mcp_config()` reads
   `mcp_config.json`, skips disabled servers (keys starting with `_`), and
   resolves `${VAR}` env placeholders. `analyze_investments(query)` is the async
   one-shot entry point; `create_session()` + `ask(graph, query, thread_id)` give
   a memory-backed multi-turn session. Model defaults to `claude-opus-4-8`
   (override via `AGENT_MODEL`).
+- `rag.py` — **RAG fallback** over the local Spanish corpus in `rag_data/`
+  (noisy-OCR Argentine notarial deeds: *sociedad anónima* constitutions and
+  statutes, Ley 19.550). `build_rag_tool()` loads/builds a persisted **FAISS**
+  index (local `sentence-transformers` embeddings — no API key) and returns a
+  LangChain tool that `_load_tools()` appends to the MCP tools. The tool is a
+  **fallback**: Claude reaches for it only when the finance tools don't apply.
+  It enforces a **two-layer out-of-scope guardrail** — a Claude scope classifier
+  (`RAG_GUARD_MODEL`, default Haiku) rejects non-commercial-societies queries
+  before retrieval, and a cosine **relevance floor** (`RAG_RELEVANCE_THRESHOLD`)
+  suppresses weak matches. The index is persisted to `RAG_INDEX_DIR`
+  (default `.rag_index/`, git-ignored) and rebuilt when the corpus changes.
 - `main.py` — CLI wrapper; sets the Windows Proactor event loop and calls
   `asyncio.run(...)`.
 - `mcp_config.json` — MCP server definitions. `yahoo_finance` is active;

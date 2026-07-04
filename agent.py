@@ -1,23 +1,32 @@
 """Investment-analysis agent built on LangGraph + MCP.
 
-The agent runs a ReAct loop implemented as an explicit LangGraph ``StateGraph``:
+The agent runs a ReAct loop implemented as an explicit LangGraph ``StateGraph``.
+The **RAG fallback strategy is a first-class node** in the graph: when Claude
+invokes the commercial-societies retrieval tool, the router steers that turn to a
+dedicated ``rag`` node, distinct from the ``tools`` node that runs the live MCP
+data tools::
 
-    START ─▶ agent ──(tool calls?)──▶ tools ─▶ agent ─▶ ... ─▶ END
-                 └────────(no tool calls)───────────────────▶ END
+    START ─▶ agent ──(RAG tool call?)──────▶ rag ──▶ agent ─▶ ... ─▶ END
+                 ├──(other tool call?)──────▶ tools ─▶ agent
+                 └──(no tool calls)─────────────────────────────▶ END
 
-Two nodes are wired by hand:
+Nodes wired by hand:
 
 - ``agent``  — calls Claude (with tools bound) on the running message history.
-- ``tools``  — executes whatever tools Claude requested and appends the results.
+- ``tools``  — executes the live data tools (MCP servers) Claude requested.
+- ``rag``    — executes the Spanish commercial-societies retrieval fallback
+  (``rag.build_rag_tool()``), which carries its own scope + relevance guardrail.
 
-A conditional edge loops back to ``agent`` while Claude keeps requesting tools,
-and routes to ``END`` once it produces a final answer. Building the graph
-explicitly (rather than using ``create_react_agent``) leaves room to add nodes
-for validation, guardrails, or multi-stage analysis.
+``_route_after_agent`` loops back to ``agent`` while Claude keeps requesting
+tools and routes to ``END`` once it produces a final answer. Splitting the RAG
+fallback into its own node (rather than folding it into ``tools``) makes the
+retrieval strategy explicit in the graph and gives it a dedicated place to
+evolve — building the graph by hand rather than via ``create_react_agent`` is
+what leaves that room.
 
-Tools come from one or more MCP servers declared in ``mcp_config.json``. Data
-source today is the Yahoo Finance MCP server; when CHE MCP is released, enabling
-it is a config-only change — this module does not need to be touched.
+Live-data tools come from one or more MCP servers declared in ``mcp_config.json``
+(Yahoo Finance today; CHE MCP is a config-only swap). The RAG fallback is a
+local tool added in :func:`_load_tools`; see ``rag.py``.
 """
 
 from __future__ import annotations
@@ -41,6 +50,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+
+import rag
 
 load_dotenv()
 
@@ -67,6 +78,20 @@ growth, risk/volatility, analyst views) side by side before concluding.
 advice or guarantees of returns; frame output as analysis, not a recommendation \
 to buy or sell.
 - Show your reasoning concisely, then give a clear summary the user can act on.
+
+Fallback knowledge base and scope:
+- Your primary job is investment analysis using the live financial tools. As a \
+fallback, you also have a document-retrieval tool over a local corpus of \
+Argentine commercial-society records (sociedades comerciales — constitution \
+deeds, statutes, corporate purpose, directors, capital, Ley 19.550). Those \
+source documents are in Spanish.
+- Use the retrieval tool only when the financial tools cannot answer and the \
+question is about Argentine commercial societies. Ground any such answer in the \
+retrieved excerpts and cite the source documents; if the tool reports the query \
+is out of scope or returns no relevant records, relay that plainly instead of \
+inventing an answer. Respond in the language the user used.
+- If a request is neither about markets/investments nor about Argentine \
+commercial societies, say it is outside your scope rather than guessing.
 """
 
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
@@ -148,12 +173,24 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
 
 
-def _should_continue(state: AgentState) -> str:
-    """Route to the tools node if Claude requested tools, else finish."""
+def _route_after_agent(state: AgentState) -> str:
+    """Route the agent's turn to the right node.
+
+    - No tool calls          → ``END`` (Claude produced a final answer).
+    - Any RAG tool call       → ``rag`` (the commercial-societies fallback).
+    - Otherwise               → ``tools`` (live MCP data tools).
+
+    RAG takes precedence when a single turn mixes both (rare, since the domains
+    are disjoint); the ``rag`` node still answers every tool call in that turn,
+    so no ``tool_use`` is ever left without a ``tool_result``.
+    """
     last = state["messages"][-1]
-    if getattr(last, "tool_calls", None):
-        return "tools"
-    return END
+    tool_calls = getattr(last, "tool_calls", None)
+    if not tool_calls:
+        return END
+    if any(call["name"] == rag.TOOL_NAME for call in tool_calls):
+        return "rag"
+    return "tools"
 
 
 def build_agent_graph(tools: list, checkpointer=None):
@@ -177,8 +214,13 @@ def build_agent_graph(tools: list, checkpointer=None):
         response = await model.ainvoke(messages)
         return {"messages": [response]}
 
-    async def call_tools(state: AgentState) -> dict:
-        """The ``tools`` node: run every tool Claude asked for."""
+    async def _run_tool_calls(state: AgentState) -> dict:
+        """Execute every tool call in the latest message and append results.
+
+        Shared by the ``tools`` and ``rag`` nodes: the router decides *which*
+        node a turn enters, but both resolve calls against the same registry so
+        every ``tool_use`` gets a matching ``tool_result`` even in a mixed turn.
+        """
         last = state["messages"][-1]
         observations: list[ToolMessage] = []
         for call in last.tool_calls:
@@ -200,14 +242,28 @@ def build_agent_graph(tools: list, checkpointer=None):
             )
         return {"messages": observations}
 
+    async def call_tools(state: AgentState) -> dict:
+        """The ``tools`` node: run the live MCP data tools Claude asked for."""
+        return await _run_tool_calls(state)
+
+    async def call_rag(state: AgentState) -> dict:
+        """The ``rag`` node: run the commercial-societies retrieval fallback.
+
+        A dedicated node so the RAG strategy is explicit in the graph; the tool
+        itself enforces the scope + relevance guardrail (see ``rag.py``).
+        """
+        return await _run_tool_calls(state)
+
     builder = StateGraph(AgentState)
     builder.add_node("agent", call_model)
     builder.add_node("tools", call_tools)
+    builder.add_node("rag", call_rag)
     builder.add_edge(START, "agent")
     builder.add_conditional_edges(
-        "agent", _should_continue, {"tools": "tools", END: END}
+        "agent", _route_after_agent, {"tools": "tools", "rag": "rag", END: END}
     )
     builder.add_edge("tools", "agent")
+    builder.add_edge("rag", "agent")
     return builder.compile(checkpointer=checkpointer)
 
 
@@ -216,10 +272,17 @@ def build_agent_graph(tools: list, checkpointer=None):
 # --------------------------------------------------------------------------- #
 
 async def _load_tools() -> list:
-    """Connect to the enabled MCP servers and return their tools."""
+    """Return the agent's tools: the MCP server tools plus the RAG fallback.
+
+    MCP remains the primary tool source (live financial data). The local RAG
+    tool is appended as a fallback for Argentine commercial-society questions;
+    its retrieval index is built/loaded once here, at startup.
+    """
     servers = resolve_commands(load_mcp_config())
     client = MultiServerMCPClient(servers)
-    return await client.get_tools()
+    tools = await client.get_tools()
+    tools.append(rag.build_rag_tool())
+    return tools
 
 
 async def analyze_investments(query: str) -> str:
@@ -262,4 +325,5 @@ async def ask(graph, query: str, thread_id: str = "cli-session") -> str:
             "configurable": {"thread_id": thread_id},
         },
     )
+
     return result["messages"][-1].content

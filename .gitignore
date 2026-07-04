@@ -3,11 +3,18 @@
 
 # Virtual environment
 .venv/
+venv/
 
 # Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Persisted RAG embeddings index (rebuilt from rag_data/ on demand)
+.rag_index/
+
+# RAG corpus: track the OCR text, keep the large page-scan images out of git
+rag_data/**/*.png
 
 # IDE
 .idea/
