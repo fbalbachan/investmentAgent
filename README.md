@@ -87,6 +87,13 @@ commercial-society (*sociedades comerciales*) questions only.
 Everything runs locally on CPU. If `rank_bm25` or the reranker model is
 unavailable, retrieval degrades gracefully (dense-only / fusion order).
 
+The tool takes **two inputs**: `query` (the semantic need) and optional
+`exact_terms` (verbatim identifiers — company name, CUIT/DNI, article number).
+Keeping them separate stops a rare, distinctive token from being diluted by
+generic legal boilerplate in a long question: `exact_terms` tokens are weighted
+up (`RAG_EXACT_BOOST`) in the BM25 half and carried into the rerank query, so
+entity-targeted lookups land the right document.
+
 - **Out-of-scope guardrail** — (1) a cheap Claude scope classifier rejects
   non–commercial-society queries *before* retrieval, and (2) a relevance floor
   (reranker probability **or** dense cosine must clear a threshold) returns
@@ -97,7 +104,7 @@ unavailable, retrieval degrades gracefully (dense-only / fusion order).
 Optional tuning (env vars, all with defaults): `RAG_EMBED_MODEL`,
 `RAG_RERANK_MODEL` (`""`/`none` disables reranking), `RAG_GUARD_MODEL`,
 `RAG_RELEVANCE_THRESHOLD`, `RAG_RERANK_THRESHOLD`, `RAG_DENSE_K`, `RAG_SPARSE_K`,
-`RAG_FUSE_K`, `RAG_TOP_K`, `RAG_INDEX_DIR`. See `rag.py`.
+`RAG_FUSE_K`, `RAG_TOP_K`, `RAG_EXACT_BOOST`, `RAG_INDEX_DIR`. See `rag.py`.
 
 > `pip install -r requirements.txt` pulls `sentence-transformers`/`torch`
 > (a large, ~2 GB download); the embedder and reranker models download on first

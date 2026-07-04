@@ -47,7 +47,13 @@ Configuration (all optional, via environment):
 - ``RAG_DENSE_K`` / ``RAG_SPARSE_K``  first-stage candidates per retriever (20 each).
 - ``RAG_FUSE_K``               candidates kept after fusion, fed to the reranker (12).
 - ``RAG_TOP_K``                final chunks returned (default 4).
+- ``RAG_EXACT_BOOST``          lexical weight for ``exact_terms`` tokens (default 3).
 - ``RAG_INDEX_DIR``            where the FAISS index + chunk cache are persisted.
+
+The tool takes two inputs: ``query`` (the semantic need) and optional
+``exact_terms`` (verbatim identifiers — company name, CUIT/DNI, article number).
+Splitting them keeps a rare, distinctive token from being diluted by generic
+legal boilerplate in a long ``query`` (see :class:`_RagQuery`).
 """
 
 from __future__ import annotations
@@ -57,6 +63,8 @@ import json
 import os
 import re
 from pathlib import Path
+
+from pydantic import BaseModel, Field
 
 # The default models are PUBLIC Hugging Face repos. If the machine has a
 # stale/expired HF token cached (from a prior `huggingface-cli login` or an
@@ -100,6 +108,12 @@ FUSE_K = int(os.environ.get("RAG_FUSE_K", "12"))      # kept after fusion → re
 TOP_K = int(os.environ.get("RAG_TOP_K", "4"))         # final chunks returned
 RRF_K = int(os.environ.get("RAG_RRF_K", "60"))        # RRF damping constant
 
+# How strongly ``exact_terms`` (company names, CUIT/DNI, article numbers) weigh in
+# the BM25 half. BM25 sums per query-token, so repeating those tokens N times
+# multiplies their lexical weight — keeping a rare, distinctive token from being
+# drowned out by common legal boilerplate in a long query.
+EXACT_BOOST = int(os.environ.get("RAG_EXACT_BOOST", "3"))
+
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 
@@ -112,8 +126,12 @@ TOOL_DESCRIPTION = (
     "bylaws/statutes (estatutos), corporate purpose (objeto social), directors "
     "(directorio), share capital (capital social), partners/shareholders "
     "(socios/accionistas), or Ley 19.550. The source documents are in Spanish, so "
-    "the retrieved excerpts are in Spanish. Input: the user's question (Spanish or "
-    "English). The tool enforces its own scope: unrelated questions are rejected."
+    "the retrieved excerpts are in Spanish. The tool enforces its own scope: "
+    "unrelated questions are rejected.\n"
+    "Query tips: keep `query` focused on the information need; do NOT pad it with "
+    "generic legal boilerplate. Put any exact identifiers you are looking for — "
+    "company name, CUIT/DNI numbers, article numbers — in `exact_terms` so they "
+    "are matched verbatim (e.g. query='objeto social', exact_terms='PUNTO FM S.A.')."
 )
 
 # Guardrail responses (returned to the model as the tool result).
@@ -127,6 +145,28 @@ _NO_RESULTS_MSG = (
     "[SIN RESULTADOS] No se encontraron registros relevantes de sociedades "
     "comerciales para esta consulta en el corpus disponible."
 )
+
+class _RagQuery(BaseModel):
+    """Structured input for the RAG tool — keeps the semantic need and the exact
+    identifiers separate so lexical anchors aren't diluted by a long sentence."""
+
+    query: str = Field(
+        description=(
+            "The information need, in Spanish or English (e.g. 'objeto social', "
+            "'quiénes son los directores'). Keep it focused; do not pad with "
+            "generic legal boilerplate."
+        )
+    )
+    exact_terms: str = Field(
+        default="",
+        description=(
+            "Exact identifiers to match verbatim — company name(s), CUIT/DNI "
+            "numbers, article numbers (e.g. 'PUNTO FM S.A.' or '30-71060977-9'). "
+            "Space/comma-separated. These are boosted in the lexical (BM25) search "
+            "so a rare, distinctive token isn't drowned out. Leave empty if none."
+        ),
+    )
+
 
 _SCOPE_SYSTEM_PROMPT = (
     "You are a strict scope classifier for a document retrieval tool. The tool "
@@ -406,15 +446,23 @@ def build_rag_tool():
     bm25 = _build_bm25(chunks)
     cross_encoder = _load_cross_encoder()
 
-    def _search(query: str):
-        """Hybrid retrieve → fuse → rerank → relevance floor. Returns hit dicts or None."""
+    def _search(query: str, exact_terms: str = ""):
+        """Hybrid retrieve → fuse → rerank → relevance floor. Returns hit dicts or None.
+
+        ``exact_terms`` (company names, CUIT/DNI, article numbers) are weighted up
+        in the BM25 query and appended to the rerank query so distinctive tokens
+        survive a long, boilerplate-heavy natural-language ``query``.
+        """
+        exact_terms = (exact_terms or "").strip()
         text_by_key: dict = {}
         source_by_key: dict = {}
         cosine_by_key: dict = {}
 
-        # 1. Dense (semantic) candidates.
+        # 1. Dense (semantic) candidates. exact_terms are appended so the entity is
+        #    present in the embedded query too, but kept light (added once).
+        dense_query = f"{query} {exact_terms}".strip() if exact_terms else query
         dense_rank = []
-        for doc, dist in store.similarity_search_with_score(query, k=DENSE_K):
+        for doc, dist in store.similarity_search_with_score(dense_query, k=DENSE_K):
             source = doc.metadata.get("source", "desconocido")
             key = f"{source}\x00{doc.page_content}"
             text_by_key.setdefault(key, doc.page_content)
@@ -422,10 +470,12 @@ def build_rag_tool():
             cosine_by_key[key] = _l2_to_cosine(dist)
             dense_rank.append(key)
 
-        # 2. Sparse (BM25 lexical) candidates.
+        # 2. Sparse (BM25 lexical) candidates. Repeating exact_terms tokens
+        #    EXACT_BOOST times multiplies their weight in the BM25 sum.
         sparse_rank = []
         if bm25 is not None:
-            scores = bm25.get_scores(_tokenize(query))
+            q_tokens = _tokenize(query) + _tokenize(exact_terms) * EXACT_BOOST
+            scores = bm25.get_scores(q_tokens)
             for i in np.argsort(scores)[::-1][:SPARSE_K]:
                 if scores[i] <= 0:
                     continue
@@ -442,9 +492,13 @@ def build_rag_tool():
             return None
 
         # 4. Cross-encoder rerank (probability via sigmoid), else keep fusion order.
+        #    The reranker query carries exact_terms so it recognizes the target entity.
+        rerank_query = f"{query} {exact_terms}".strip() if exact_terms else query
         rerank_by_key: dict = {}
         if cross_encoder is not None:
-            logits = cross_encoder.predict([(query, text_by_key[k]) for k in candidates])
+            logits = cross_encoder.predict(
+                [(rerank_query, text_by_key[k]) for k in candidates]
+            )
             probs = 1.0 / (1.0 + np.exp(-np.asarray(logits, dtype=float)))
             rerank_by_key = {k: float(p) for k, p in zip(candidates, probs)}
             ordered = sorted(candidates, key=lambda k: rerank_by_key[k], reverse=True)
@@ -472,18 +526,21 @@ def build_rag_tool():
             for k in kept
         ]
 
-    def _consultar(query: str) -> str:
+    def _consultar(query: str, exact_terms: str = "") -> str:
         """Consult the commercial-societies corpus, enforcing scope + relevance."""
         query = (query or "").strip()
-        if not query:
+        exact_terms = (exact_terms or "").strip()
+        # The scope check considers both fields (exact_terms may hold the subject).
+        combined = f"{query} {exact_terms}".strip()
+        if not combined:
             return _NO_RESULTS_MSG
 
         # Layer 1 — scope guardrail: reject off-topic queries before retrieval.
-        if not _in_scope(query):
+        if not _in_scope(combined):
             return _OUT_OF_SCOPE_MSG
 
         # Layers 2+ — hybrid retrieval, rerank, and the relevance floor.
-        hits = _search(query)
+        hits = _search(query, exact_terms)
         if not hits:
             return _NO_RESULTS_MSG
         return _format_hits(hits)
@@ -492,4 +549,5 @@ def build_rag_tool():
         func=_consultar,
         name=TOOL_NAME,
         description=TOOL_DESCRIPTION,
+        args_schema=_RagQuery,
     )
