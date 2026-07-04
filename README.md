@@ -7,6 +7,7 @@ server. The data source is pluggable and declared entirely in config.
 
 - **Today:** [Yahoo Finance MCP](https://github.com/Alex2Yang97/yahoo-finance-mcp) — stock prices, financial statements, options, analyst recommendations.
 - **Later:** [CHE MCP](https://github.com/Albano-schz/che-mcp-docs) (an Argentine data gateway) is not yet released. When it launches, switching to it is a **config-only change** — no Python edits required.
+- **Fallback:** a local **RAG** knowledge base of Argentine commercial-society records (Spanish), used only when the live tools can't answer — with an out-of-scope guardrail. See [RAG fallback](#rag-fallback-commercial-societies).
 
 ## Stack
 
@@ -24,6 +25,7 @@ Supporting libraries (around the framework, not the framework itself):
 
 - **`langchain-anthropic`** (`ChatAnthropic`) — the LLM binding to Claude (`claude-opus-4-8`).
 - **`langchain-mcp-adapters`** (`MultiServerMCPClient`) — turns an MCP server's tools into tools LangGraph can call.
+- **`sentence-transformers` + `faiss` + `langchain-huggingface`** — local embeddings and vector index for the RAG fallback (`rag.py`).
 
 In short: **LangGraph = orchestration / agentic framework**, Claude = the model,
 MCP = the pluggable tool/data source.
@@ -43,19 +45,49 @@ MCP = the pluggable tool/data source.
 tools to Claude, and runs the ReAct loop as an explicit LangGraph `StateGraph`:
 
 ```
-START ─▶ agent ──(tool calls?)──▶ tools ─▶ agent ─▶ ... ─▶ END
-             └────────(no tool calls)───────────────────▶ END
+START ─▶ agent ──(RAG tool call?)──────▶ rag ──▶ agent ─▶ ... ─▶ END
+             ├──(other tool call?)──────▶ tools ─▶ agent
+             └──(no tool calls)─────────────────────────────▶ END
 ```
 
 - **`agent` node** — calls Claude (with tools bound) on the running message history.
-- **`tools` node** — executes whatever tools Claude requested and appends the results.
-- A **conditional edge** loops back to `agent` while Claude keeps requesting
-  tools, and routes to `END` once it produces a final answer.
+- **`tools` node** — executes the live data tools (MCP servers) Claude requested.
+- **`rag` node** — runs the Spanish commercial-societies retrieval fallback
+  (`rag.py`), which carries its own scope + relevance guardrail. See
+  [RAG fallback](#rag-fallback-commercial-societies).
+- The **router** (`_route_after_agent`) loops back to `agent` while Claude keeps
+  requesting tools, and routes to `END` once it produces a final answer.
 
-The graph is hand-wired (rather than using `create_react_agent`) so there's room
-to add nodes for validation, guardrails, or multi-stage analysis. Tool failures
-are caught per-call and fed back to Claude, and an `AGENT_RECURSION_LIMIT`
-(default 25) caps the loop.
+The graph is hand-wired (rather than using `create_react_agent`), which is what
+lets the RAG fallback live in its own node alongside `tools` — with room to add
+further nodes for validation or multi-stage analysis. Tool failures are caught
+per-call and fed back to Claude, and an `AGENT_RECURSION_LIMIT` (default 25) caps
+the loop.
+
+## RAG fallback (commercial societies)
+
+When the live financial tools can't answer, the agent falls back to a local
+retrieval tool over a **Spanish** corpus of Argentine commercial-society
+documents (`rag_data/` — notarial constitution deeds and statutes under
+Ley 19.550). It is **scoped**: a two-layer guardrail keeps it to
+commercial-society (*sociedades comerciales*) questions only.
+
+- **Local embeddings** — `sentence-transformers` on CPU, so there's **no
+  embeddings API key and no per-call cost**. A FAISS index is built once from
+  `rag_data/**/*.txt` and persisted to `.rag_index/` (rebuilt when the corpus
+  changes).
+- **Out-of-scope guardrail** — (1) a cheap Claude scope classifier rejects
+  non–commercial-society queries *before* retrieval, and (2) a cosine relevance
+  floor suppresses weak matches instead of guessing.
+- Retrieved excerpts are in Spanish; Claude grounds its answer in them and cites
+  the source documents.
+
+Optional tuning (env vars, all with defaults): `RAG_EMBED_MODEL`,
+`RAG_GUARD_MODEL`, `RAG_RELEVANCE_THRESHOLD`, `RAG_TOP_K`, `RAG_INDEX_DIR`.
+See `rag.py`.
+
+> `pip install -r requirements.txt` pulls `sentence-transformers`/`torch`
+> (a large, ~2 GB download) for the local embeddings.
 
 ## Requirements
 
@@ -142,7 +174,9 @@ environment variable.
 
 | File | Role |
 |------|------|
-| `agent.py` | Builds the LangGraph `StateGraph` ReAct loop; `load_mcp_config()`, `build_agent_graph()`, `analyze_investments(query)`. |
+| `agent.py` | Builds the LangGraph `StateGraph` ReAct loop (`agent`/`tools`/`rag` nodes); `load_mcp_config()`, `build_agent_graph()`, `analyze_investments(query)`. |
+| `rag.py` | RAG fallback — local embeddings + persisted FAISS index over `rag_data/`, exposed as a guardrailed LangChain tool (`build_rag_tool()`). |
+| `rag_data/` | Spanish corpus (OCR `.txt`) of Argentine commercial-society documents the RAG tool retrieves from. |
 | `main.py` | CLI wrapper — reads the query, sets UTF-8 output + Windows Proactor loop, runs the agent. |
 | `mcp_config.json` | MCP server list (`yahoo_finance` active; CHE MCP placeholder). |
 | `requirements.txt` | Python dependencies. |
