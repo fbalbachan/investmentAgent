@@ -46,7 +46,7 @@ Configuration (all optional, via environment):
 - ``RAG_RERANK_THRESHOLD``     reranker probability floor in [0, 1] (default 0.30).
 - ``RAG_DENSE_K`` / ``RAG_SPARSE_K``  first-stage candidates per retriever (20 each).
 - ``RAG_FUSE_K``               candidates kept after fusion, fed to the reranker (12).
-- ``RAG_TOP_K``                final chunks returned (default 4).
+- ``RAG_TOP_K``                final chunks returned (default 6).
 - ``RAG_EXACT_BOOST``          lexical weight for ``exact_terms`` tokens (default 3).
 - ``RAG_INDEX_DIR``            where the FAISS index + chunk cache are persisted.
 
@@ -105,7 +105,7 @@ RERANK_THRESHOLD = float(os.environ.get("RAG_RERANK_THRESHOLD", "0.30"))
 DENSE_K = int(os.environ.get("RAG_DENSE_K", "20"))   # dense first-stage candidates
 SPARSE_K = int(os.environ.get("RAG_SPARSE_K", "20"))  # BM25 first-stage candidates
 FUSE_K = int(os.environ.get("RAG_FUSE_K", "12"))      # kept after fusion → reranker
-TOP_K = int(os.environ.get("RAG_TOP_K", "4"))         # final chunks returned
+TOP_K = int(os.environ.get("RAG_TOP_K", "6"))         # final chunks returned
 RRF_K = int(os.environ.get("RAG_RRF_K", "60"))        # RRF damping constant
 
 # How strongly ``exact_terms`` (company names, CUIT/DNI, article numbers) weigh in
