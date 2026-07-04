@@ -25,7 +25,7 @@ Supporting libraries (around the framework, not the framework itself):
 
 - **`langchain-anthropic`** (`ChatAnthropic`) — the LLM binding to Claude (`claude-opus-4-8`).
 - **`langchain-mcp-adapters`** (`MultiServerMCPClient`) — turns an MCP server's tools into tools LangGraph can call.
-- **`sentence-transformers` + `faiss` + `langchain-huggingface`** — local embeddings and vector index for the RAG fallback (`rag.py`).
+- **`sentence-transformers` + `faiss` + `rank-bm25` + `langchain-huggingface`** — local embeddings, vector index, BM25 lexical search, and the cross-encoder reranker for the hybrid RAG fallback (`rag.py`).
 
 In short: **LangGraph = orchestration / agentic framework**, Claude = the model,
 MCP = the pluggable tool/data source.
@@ -72,22 +72,36 @@ documents (`rag_data/` — notarial constitution deeds and statutes under
 Ley 19.550). It is **scoped**: a two-layer guardrail keeps it to
 commercial-society (*sociedades comerciales*) questions only.
 
-- **Local embeddings** — `sentence-transformers` on CPU, so there's **no
-  embeddings API key and no per-call cost**. A FAISS index is built once from
-  `rag_data/**/*.txt` and persisted to `.rag_index/` (rebuilt when the corpus
-  changes).
+**Hybrid retrieval + reranking** — well suited to noisy OCR, where exact tokens
+(company names, CUIT/DNI, article numbers) matter as much as meaning:
+
+1. **Dense** — semantic search over local `sentence-transformers` embeddings in a
+   persisted FAISS index (cosine). No embeddings API key, no per-call cost.
+2. **Sparse** — BM25 lexical search (`rank_bm25`) over the same chunks, catching
+   exact-string matches dense vectors miss.
+3. **Fusion** — the two rankings are merged with **Reciprocal Rank Fusion**
+   (robust to the different score scales of cosine vs BM25).
+4. **Rerank** — a multilingual **cross-encoder** re-scores the fused candidates
+   and picks the final top-k.
+
+Everything runs locally on CPU. If `rank_bm25` or the reranker model is
+unavailable, retrieval degrades gracefully (dense-only / fusion order).
+
 - **Out-of-scope guardrail** — (1) a cheap Claude scope classifier rejects
-  non–commercial-society queries *before* retrieval, and (2) a cosine relevance
-  floor suppresses weak matches instead of guessing.
+  non–commercial-society queries *before* retrieval, and (2) a relevance floor
+  (reranker probability **or** dense cosine must clear a threshold) returns
+  "no relevant records" instead of guessing.
 - Retrieved excerpts are in Spanish; Claude grounds its answer in them and cites
   the source documents.
 
 Optional tuning (env vars, all with defaults): `RAG_EMBED_MODEL`,
-`RAG_GUARD_MODEL`, `RAG_RELEVANCE_THRESHOLD`, `RAG_TOP_K`, `RAG_INDEX_DIR`.
-See `rag.py`.
+`RAG_RERANK_MODEL` (`""`/`none` disables reranking), `RAG_GUARD_MODEL`,
+`RAG_RELEVANCE_THRESHOLD`, `RAG_RERANK_THRESHOLD`, `RAG_DENSE_K`, `RAG_SPARSE_K`,
+`RAG_FUSE_K`, `RAG_TOP_K`, `RAG_INDEX_DIR`. See `rag.py`.
 
 > `pip install -r requirements.txt` pulls `sentence-transformers`/`torch`
-> (a large, ~2 GB download) for the local embeddings.
+> (a large, ~2 GB download); the embedder and reranker models download on first
+> run and are cached thereafter.
 
 ## Requirements
 
