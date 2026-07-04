@@ -71,15 +71,21 @@ one-shot with no memory.
   (override via `AGENT_MODEL`).
 - `rag.py` — **RAG fallback** over the local Spanish corpus in `rag_data/`
   (noisy-OCR Argentine notarial deeds: *sociedad anónima* constitutions and
-  statutes, Ley 19.550). `build_rag_tool()` loads/builds a persisted **FAISS**
-  index (local `sentence-transformers` embeddings — no API key) and returns a
-  LangChain tool that `_load_tools()` appends to the MCP tools. The tool is a
-  **fallback**: Claude reaches for it only when the finance tools don't apply.
-  It enforces a **two-layer out-of-scope guardrail** — a Claude scope classifier
+  statutes, Ley 19.550). `build_rag_tool()` returns a LangChain tool that
+  `_load_tools()` appends to the MCP tools; Claude reaches for it only when the
+  finance tools don't apply. Retrieval is **hybrid + reranked**: dense
+  `sentence-transformers` embeddings in a persisted **FAISS** index (cosine) +
+  **BM25** lexical search (`rank_bm25`), fused with **Reciprocal Rank Fusion**,
+  then reordered by a multilingual **cross-encoder reranker** (`RAG_RERANK_MODEL`)
+  — the lexical half + reranker matter for noisy OCR and exact tokens (company
+  names, CUIT/DNI). All models run locally (no API key). It enforces a
+  **two-layer out-of-scope guardrail**: a Claude scope classifier
   (`RAG_GUARD_MODEL`, default Haiku) rejects non-commercial-societies queries
-  before retrieval, and a cosine **relevance floor** (`RAG_RELEVANCE_THRESHOLD`)
-  suppresses weak matches. The index is persisted to `RAG_INDEX_DIR`
-  (default `.rag_index/`, git-ignored) and rebuilt when the corpus changes.
+  before retrieval, and a **relevance floor** (reranker prob `RAG_RERANK_THRESHOLD`
+  OR cosine `RAG_RELEVANCE_THRESHOLD`) suppresses weak matches. The FAISS index +
+  a chunk cache are persisted to `RAG_INDEX_DIR` (default `.rag_index/`,
+  git-ignored) and rebuilt when the corpus changes; BM25 and the reranker are
+  rebuilt in-process on load.
 - `main.py` — CLI wrapper; sets the Windows Proactor event loop and calls
   `asyncio.run(...)`.
 - `mcp_config.json` — MCP server definitions. `yahoo_finance` is active;
