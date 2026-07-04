@@ -129,17 +129,29 @@ from langchain_core.messages import AIMessage
 from langgraph.graph import END
 
 
-def test_should_continue_routes_to_tools_when_tool_calls_present():
+def test_route_after_agent_routes_to_tools_for_data_tool():
     ai = AIMessage(
         content="",
         tool_calls=[{"name": "get_price", "args": {"ticker": "AAPL"}, "id": "1"}],
     )
-    assert agent._should_continue({"messages": [ai]}) == "tools"
+    assert agent._route_after_agent({"messages": [ai]}) == "tools"
 
 
-def test_should_continue_ends_when_no_tool_calls():
+def test_route_after_agent_routes_to_rag_for_rag_tool():
+    import rag
+
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": rag.TOOL_NAME, "args": {"query": "objeto social"}, "id": "1"}
+        ],
+    )
+    assert agent._route_after_agent({"messages": [ai]}) == "rag"
+
+
+def test_route_after_agent_ends_when_no_tool_calls():
     ai = AIMessage(content="Here is my final analysis.")
-    assert agent._should_continue({"messages": [ai]}) == END
+    assert agent._route_after_agent({"messages": [ai]}) == END
 
 
 def test_build_agent_graph_wires_expected_nodes(monkeypatch):
@@ -157,6 +169,7 @@ def test_build_agent_graph_wires_expected_nodes(monkeypatch):
     nodes = graph.get_graph().nodes
     assert "agent" in nodes
     assert "tools" in nodes
+    assert "rag" in nodes  # RAG fallback is its own node
 
 
 def test_build_agent_graph_accepts_checkpointer(monkeypatch):
